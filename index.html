@@ -3,9 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>着順タイム判定らくらく君（安定版）</title>
+<title>⏱タイム計測判定らくらく君</title>
 <script src="https://cdn.tailwindcss.com"></script>
-<script async src="https://docs.opencv.org/4.8.1/opencv.js"></script>
 <style>
   :root { font-family: 'Inter', sans-serif; }
   #result-container { overflow-x: auto; white-space: nowrap; cursor: grab; position: relative; }
@@ -102,7 +101,7 @@ const cameraSelect = document.getElementById('camera-select');
 
 /* ---------- state ---------- */
 let stream=null, scanning=false, animationFrameId=null, videoDevices=[];
-let frameHeight=320, resultImageData=null, columnTimes=[], timelines=[];
+let frameHeight=320, columnTimes=[], timelines=[];
 let worker=null;
 
 /* ---------- stopwatch ---------- */
@@ -159,7 +158,8 @@ async function setupCamera(deviceId=null){
     await new Promise(resolve=>{ video.onloadedmetadata=()=>resolve(); });
     captureCanvas.width=video.videoWidth; captureCanvas.height=video.videoHeight;
     frameHeight=captureCanvas.height;
-    resultCanvas.height=frameHeight; resultCanvas.width=1; resultCtx.clearRect(0,0,resultCanvas.width,resultCanvas.height); resultImageData=null; columnTimes=[];
+    // resultCanvas初期化
+    resultCanvas.height=frameHeight; resultCanvas.width=1; resultCtx.clearRect(0,0,resultCanvas.width,resultCanvas.height); columnTimes=[];
     await updateDeviceList();
     startButton.disabled=false; cameraSelect.disabled=false;
     video.classList.remove('hidden'); videoPlaceholder.classList.add('hidden');
@@ -176,30 +176,15 @@ setupCameraButton.addEventListener('click', ()=>setupCamera());
 
 /* ---------- Web Worker ---------- */
 function createWorker(){
+  // OpenCVの処理を削除し、純粋に画像データをメインスレッドに戻すWorker
   const blob=new Blob([`
-    importScripts('https://docs.opencv.org/4.8.1/opencv.js');
-    let prevMat=null;
-    let ready=false;
-    cv['onRuntimeInitialized']=()=>{
-      ready=true;
-      postMessage({type:'ready'});
-    };
+    // importScripts('https://docs.opencv.org/4.8.1/opencv.js'); // OpenCVを無効化
+    
     onmessage=function(e){
-      if(!ready){ postMessage({type:'skip'}); return; }
       const {imageData, slit, swTime}=e.data;
-      const mat=cv.matFromImageData(imageData);
-      let autoGo=false;
-      if(prevMat){
-        let diff=new cv.Mat();
-        cv.absdiff(mat,prevMat,diff);
-        cv.cvtColor(diff,diff,cv.COLOR_RGBA2GRAY);
-        let cnt=cv.countNonZero(diff);
-        if(cnt>(mat.rows*mat.cols*0.05)) autoGo=true;
-        diff.delete();
-        prevMat.delete();
-      }
-      prevMat=mat.clone();
-      postMessage({type:'result', slitImage:imageData, swTime, autoGo});
+      // 画像データとタイムをメインスレッドに転送
+      // autoGoはここでは使用しないが、互換性のためfalseを渡す
+      postMessage({type:'result', slitImage:imageData, swTime, autoGo:false}, [imageData.data.buffer]); 
     };
   `],{type:'application/javascript'});
   const url=URL.createObjectURL(blob);
@@ -209,28 +194,43 @@ function createWorker(){
     if(data.type==='result'){
       const slitImage=data.slitImage;
       const swTime=data.swTime;
-      const autoGo=data.autoGo;
-      // Canvas合成
+      const autoGo=data.autoGo; // falseとして受け取る
+
+      // Canvas合成ロジックを修正
       const prevWidth=resultCanvas.width;
       const newWidth=prevWidth+slitImage.width;
+      
       const off=document.createElement('canvas');
       off.width=newWidth; off.height=frameHeight;
       const offCtx=off.getContext('2d');
-      if(prevWidth>0 && resultImageData) offCtx.putImageData(resultImageData,0,0);
+      
+      // 既存の画像をオフスクリーンに描画
+      if(prevWidth>0) offCtx.drawImage(resultCanvas,0,0);
+      
+      // 新しいスリットを一時Canvasから描画
       const tmp=document.createElement('canvas');
       tmp.width=slitImage.width; tmp.height=slitImage.height;
       tmp.getContext('2d').putImageData(slitImage,0,0);
       offCtx.drawImage(tmp,prevWidth,0);
-      resultCanvas.width=newWidth; resultCanvas.height=frameHeight;
+      
+      // 結果Canvasを更新
+      resultCanvas.width=newWidth; 
+      resultCanvas.height=frameHeight; 
       resultCtx.drawImage(off,0,0);
-      resultImageData=resultCtx.getImageData(0,0,resultCanvas.width,resultCanvas.height);
-      if(autoGo && swTime!==undefined){
-        columnTimes.push(swTime);
-        const x=resultCanvas.width-1;
-        resultCtx.fillStyle='lime';
-        resultCtx.fillRect(x,0,2,resultCanvas.height);
+      
+      // タイムラインの記録（autoGo判定ロジックは一旦無視）
+      if(swTime!==0){ // ストップウォッチが動いていれば記録
+         columnTimes.push(swTime);
+         // タイムラインマーカーを引く（ここではautoGo判定を無視して常に引く）
+         // const x=resultCanvas.width-1; // スリット幅が1の場合は-1
+         // resultCtx.fillStyle='lime';
+         // resultCtx.fillRect(x,0,2,resultCanvas.height);
       }
+      
       if(resultCanvas.width>0) downloadButton.classList.remove('hidden');
+
+      // スクロールして最新のフレームを表示
+      resultContainer.scrollLeft = resultContainer.scrollWidth;
     }
   };
 }
@@ -244,7 +244,10 @@ function scanFrame(){
   const startX=Math.floor(captureCanvas.width/2+offset-slit/2);
   const imageData=captureCtx.getImageData(startX,0,slit,captureCanvas.height);
   const swTime=swRunning?swElapsed:0;
-  worker.postMessage({imageData,slit,swTime});
+
+  // 修正: imageData.data.bufferをTransferableとして転送
+  worker.postMessage({imageData,slit,swTime}, [imageData.data.buffer]); 
+
   animationFrameId=requestAnimationFrame(scanFrame);
 }
 
@@ -279,10 +282,23 @@ downloadButton.addEventListener('click', ()=>{
 /* ---------- result timeline click ---------- */
 resultCanvas.addEventListener('click', e=>{
   const rect=resultCanvas.getBoundingClientRect();
-  const x=e.clientX-rect.left;
+  const x=e.clientX-rect.left + resultContainer.scrollLeft; // スクロール位置を考慮
   const line=document.createElement('div');
-  line.className='timeline-line';
+  line.className='timeline-line bg-lime-400';
   line.style.left=x+'px';
+  
+  // タイムを表示する要素を追加
+  const index = Math.floor(x / resultCanvas.width * columnTimes.length);
+  const time = columnTimes[index] !== undefined ? formatTime(columnTimes[index]) : 'N/A';
+  
+  const slider = document.createElement('div');
+  slider.className = 'timeline-slider bg-lime-600 text-white text-xs text-center p-1';
+  slider.textContent = time;
+  slider.style.left = (x-4)+'px';
+  slider.style.top = '5px';
+
+  line.appendChild(slider);
+
   resultContainer.appendChild(line);
 });
 
