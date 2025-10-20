@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>着順タイム判定らくらく君（安定版）</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script async src="https://docs.opencv.org/4.8.1/opencv.js"></script>
+<style>
+  :root { font-family: 'Inter', sans-serif; }
+  #result-container { overflow-x: auto; white-space: nowrap; cursor: grab; position: relative; }
+  #capture-canvas { position: fixed; top: -9999px; left: -9999px; }
+  #video { width: 100%; height: 100%; object-fit: cover; position: absolute; top:0; left:0; z-index:10; }
+  .scan-line { position:absolute; top:0; height:100%; pointer-events:none; opacity:0.75; z-index:30; }
+  .stopwatch { font-weight:bold; font-size:16px; }
+  .timeline-line { position:absolute; width:2px; top:0; height:100%; z-index:40; cursor:ew-resize; }
+  .timeline-slider { position:absolute; width:8px; height:24px; top:0; background:rgba(255,255,255,0.5); border-radius:4px; z-index:50; cursor:pointer; }
+  #result-canvas { display:block; }
+</style>
+</head>
+<body class="bg-gray-100 min-h-screen p-4 md:p-8">
+<div class="max-w-5xl mx-auto">
+  <h1 class="text-3xl font-extrabold text-indigo-700 mb-6 text-center">📸 着順タイム判定らくらく君（安定版）</h1>
+
+  <div id="message-box" class="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-800 p-4 rounded-lg mb-6 shadow-md">
+    <p class="font-bold">🏁 スキャン準備</p>
+    <p class="text-sm">カメラを起動して、スリット幅・ライン位置を設定してください。</p>
+  </div>
+
+  <div id="video-wrapper" class="relative w-full aspect-video bg-gray-800 rounded-xl overflow-hidden shadow-2xl mb-6 flex justify-center items-center">
+    <video id="video" playsinline autoplay muted class="hidden"></video>
+    <p id="video-placeholder" class="text-white text-center z-20">カメラ映像の準備中...</p>
+    <div id="scan-line" class="scan-line bg-red-500" style="left:50%; width:2px;"></div>
+  </div>
+
+  <div class="bg-white p-5 rounded-xl shadow-lg mb-6 flex flex-col md:flex-row gap-4 items-center justify-between">
+    <div class="flex flex-col w-full md:w-1/3">
+      <label for="camera-select" class="text-gray-700 text-sm font-semibold mb-1">カメラ選択:</label>
+      <select id="camera-select" class="p-2 border border-gray-300 rounded-lg shadow-sm bg-white text-gray-800 w-full" disabled>
+        <option value="">カメラを起動すると選択できます</option>
+      </select>
+    </div>
+    <div class="flex flex-col md:flex-row gap-4 w-full md:w-auto md:ml-4">
+      <button id="setup-camera-button" class="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg shadow-md">📷 カメラ起動</button>
+      <button id="start-button" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-lg shadow-md" disabled>▶️ スキャン開始</button>
+      <button id="stop-button" class="bg-red-500 hover:bg-red-600 text-white font-bold py-3 px-6 rounded-lg shadow-md hidden">⏹️ スキャン停止</button>
+    </div>
+  </div>
+
+  <div class="bg-white p-5 rounded-xl shadow-lg mb-6 flex flex-col md:flex-row gap-4 items-center">
+    <div class="flex items-center space-x-4">
+      <label for="scan-offset" class="text-gray-700 text-sm font-semibold whitespace-nowrap">判定ライン位置:</label>
+      <input type="range" id="scan-offset" min="-150" max="150" value="0" step="1" class="w-48 h-2 bg-gray-200 rounded-lg cursor-pointer">
+      <span id="offset-value" class="text-indigo-600 font-bold w-10 text-right">0</span>
+    </div>
+    <div class="flex items-center space-x-4">
+      <label for="slit-width" class="text-gray-700 text-sm font-semibold">スライス幅:</label>
+      <input type="range" id="slit-width" min="1" max="100" value="2" step="1" class="w-32 h-2 bg-gray-200 rounded-lg cursor-pointer">
+      <span id="slit-value" class="text-indigo-600 font-bold w-6 text-right">2</span>
+    </div>
+  </div>
+
+  <div class="bg-white p-5 rounded-xl shadow-lg mb-6 flex gap-4 items-center justify-center">
+    <div class="stopwatch text-2xl" id="stopwatch-display">00:00.00</div>
+    <button id="sw-start" class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-lg">▶️ スタート</button>
+    <button id="sw-stop" class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-lg">⏸️ ストップ</button>
+    <button id="sw-reset" class="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg">🔄 リセット</button>
+  </div>
+
+  <h2 class="text-xl font-semibold text-gray-800 mb-3">判定結果 (ラインスキャン画像)</h2>
+  <div id="result-container" class="w-full h-80 bg-gray-900 rounded-xl shadow-inner border border-gray-300 overflow-x-scroll relative">
+    <canvas id="result-canvas"></canvas>
+  </div>
+  <p class="text-sm text-gray-600 mt-2">左右にスクロールして着順を確認してください。クリックで縦線タイムライン追加。</p>
+  <div class="mt-6 text-center">
+    <button id="download-button" class="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-lg shadow-lg hidden">⬇️ 判定画像をダウンロード</button>
+  </div>
+
+  <canvas id="capture-canvas"></canvas>
+</div>
+
+<script>
+/* ---------- DOM ---------- */
+const video = document.getElementById('video');
+const videoPlaceholder = document.getElementById('video-placeholder');
+const captureCanvas = document.getElementById('capture-canvas');
+const captureCtx = captureCanvas.getContext('2d');
+const resultCanvas = document.getElementById('result-canvas');
+const resultCtx = resultCanvas.getContext('2d');
+const setupCameraButton = document.getElementById('setup-camera-button');
+const startButton = document.getElementById('start-button');
+const stopButton = document.getElementById('stop-button');
+const downloadButton = document.getElementById('download-button');
+const messageBox = document.getElementById('message-box');
+const scanLine = document.getElementById('scan-line');
+const scanOffsetInput = document.getElementById('scan-offset');
+const offsetValueSpan = document.getElementById('offset-value');
+const slitInput = document.getElementById('slit-width');
+const slitValueSpan = document.getElementById('slit-value');
+const resultContainer = document.getElementById('result-container');
+const cameraSelect = document.getElementById('camera-select');
+
+/* ---------- state ---------- */
+let stream=null, scanning=false, animationFrameId=null, videoDevices=[];
+let frameHeight=320, resultImageData=null, columnTimes=[], timelines=[];
+let worker=null;
+
+/* ---------- stopwatch ---------- */
+let swStart=0, swElapsed=0, swRunning=false;
+const swDisplay=document.getElementById('stopwatch-display');
+function formatTime(sec){
+  const m=Math.floor(sec/60);
+  const s=Math.floor(sec%60);
+  const cs=Math.floor((sec*100)%100);
+  return `${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}.${cs.toString().padStart(2,'0')}`;
+}
+function updateStopwatchLoop(){
+  if(swRunning) swElapsed=(performance.now()-swStart)/1000;
+  swDisplay.textContent=formatTime(swElapsed);
+  requestAnimationFrame(updateStopwatchLoop);
+}
+document.getElementById('sw-start').onclick=()=>{ if(!swRunning){ swRunning=true; swStart=performance.now()-swElapsed*1000; } };
+document.getElementById('sw-stop').onclick=()=>{ swRunning=false; };
+document.getElementById('sw-reset').onclick=()=>{ swRunning=false; swElapsed=0; swDisplay.textContent='00:00.00'; columnTimes=[]; };
+
+/* ---------- UI handlers ---------- */
+scanOffsetInput.addEventListener('input', e=>{
+  const val=parseInt(e.target.value);
+  offsetValueSpan.textContent=val;
+  scanLine.style.left=`calc(50% + ${val}px)`;
+});
+slitInput.addEventListener('input', e=>{
+  const val=parseInt(e.target.value);
+  slitValueSpan.textContent=val;
+});
+
+/* ---------- camera/device ---------- */
+async function updateDeviceList(selectedId=null){
+  const devices=await navigator.mediaDevices.enumerateDevices();
+  videoDevices=devices.filter(d=>d.kind==='videoinput');
+  cameraSelect.innerHTML='';
+  if(videoDevices.length===0){ cameraSelect.disabled=true; cameraSelect.innerHTML='<option>カメラなし</option>'; return; }
+  videoDevices.forEach((d,i)=>{ const opt=document.createElement('option'); opt.value=d.deviceId; opt.text=d.label||`カメラ ${i+1}`; cameraSelect.appendChild(opt); });
+  cameraSelect.disabled=false;
+  cameraSelect.value=selectedId||videoDevices[0].deviceId;
+}
+cameraSelect.addEventListener('change', ()=>{ if(scanning) stopScanning(); setupCamera(cameraSelect.value); });
+
+async function setupCamera(deviceId=null){
+  if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
+  setupCameraButton.disabled=true; startButton.disabled=true; cameraSelect.disabled=true;
+  messageBox.className='bg-blue-100 border-l-4 border-blue-500 text-blue-800 p-4 rounded-lg mb-6 shadow-md';
+  messageBox.innerHTML='<p class="font-bold">カメラ起動中...</p>';
+  let constraints={video:{width:{ideal:1280},height:{ideal:720},frameRate:{ideal:60}},audio:false};
+  if(deviceId) constraints.video.deviceId={exact:deviceId}; else constraints.video.facingMode='environment';
+  try{
+    stream=await navigator.mediaDevices.getUserMedia(constraints);
+    video.srcObject=stream;
+    await new Promise(resolve=>{ video.onloadedmetadata=()=>resolve(); });
+    captureCanvas.width=video.videoWidth; captureCanvas.height=video.videoHeight;
+    frameHeight=captureCanvas.height;
+    resultCanvas.height=frameHeight; resultCanvas.width=1; resultCtx.clearRect(0,0,resultCanvas.width,resultCanvas.height); resultImageData=null; columnTimes=[];
+    await updateDeviceList();
+    startButton.disabled=false; cameraSelect.disabled=false;
+    video.classList.remove('hidden'); videoPlaceholder.classList.add('hidden');
+    messageBox.className='bg-green-100 border-l-4 border-green-500 text-green-800 p-4 rounded-lg mb-6 shadow-md';
+    messageBox.innerHTML='<p class="font-bold">✅ カメラ準備完了</p>';
+  }catch(err){
+    console.error(err);
+    messageBox.className='bg-red-100 border-l-4 border-red-500 text-red-800 p-4 rounded-lg mb-6 shadow-md';
+    messageBox.innerHTML=`<p class="font-bold">❌ カメラ起動失敗</p><p>${err.message}</p>`;
+    setupCameraButton.disabled=false;
+  }
+}
+setupCameraButton.addEventListener('click', ()=>setupCamera());
+
+/* ---------- Web Worker ---------- */
+function createWorker(){
+  const blob=new Blob([`
+    importScripts('https://docs.opencv.org/4.8.1/opencv.js');
+    let prevMat=null;
+    let ready=false;
+    cv['onRuntimeInitialized']=()=>{
+      ready=true;
+      postMessage({type:'ready'});
+    };
+    onmessage=function(e){
+      if(!ready){ postMessage({type:'skip'}); return; }
+      const {imageData, slit, swTime}=e.data;
+      const mat=cv.matFromImageData(imageData);
+      let autoGo=false;
+      if(prevMat){
+        let diff=new cv.Mat();
+        cv.absdiff(mat,prevMat,diff);
+        cv.cvtColor(diff,diff,cv.COLOR_RGBA2GRAY);
+        let cnt=cv.countNonZero(diff);
+        if(cnt>(mat.rows*mat.cols*0.05)) autoGo=true;
+        diff.delete();
+        prevMat.delete();
+      }
+      prevMat=mat.clone();
+      postMessage({type:'result', slitImage:imageData, swTime, autoGo});
+    };
+  `],{type:'application/javascript'});
+  const url=URL.createObjectURL(blob);
+  worker=new Worker(url);
+  worker.onmessage=function(e){
+    const data=e.data;
+    if(data.type==='result'){
+      const slitImage=data.slitImage;
+      const swTime=data.swTime;
+      const autoGo=data.autoGo;
+      // Canvas合成
+      const prevWidth=resultCanvas.width;
+      const newWidth=prevWidth+slitImage.width;
+      const off=document.createElement('canvas');
+      off.width=newWidth; off.height=frameHeight;
+      const offCtx=off.getContext('2d');
+      if(prevWidth>0 && resultImageData) offCtx.putImageData(resultImageData,0,0);
+      const tmp=document.createElement('canvas');
+      tmp.width=slitImage.width; tmp.height=slitImage.height;
+      tmp.getContext('2d').putImageData(slitImage,0,0);
+      offCtx.drawImage(tmp,prevWidth,0);
+      resultCanvas.width=newWidth; resultCanvas.height=frameHeight;
+      resultCtx.drawImage(off,0,0);
+      resultImageData=resultCtx.getImageData(0,0,resultCanvas.width,resultCanvas.height);
+      if(autoGo && swTime!==undefined){
+        columnTimes.push(swTime);
+        const x=resultCanvas.width-1;
+        resultCtx.fillStyle='lime';
+        resultCtx.fillRect(x,0,2,resultCanvas.height);
+      }
+      if(resultCanvas.width>0) downloadButton.classList.remove('hidden');
+    }
+  };
+}
+
+/* ---------- scanning loop ---------- */
+function scanFrame(){
+  if(!scanning) return;
+  captureCtx.drawImage(video,0,0,captureCanvas.width,captureCanvas.height);
+  const slit=parseInt(slitInput.value);
+  const offset=parseInt(scanOffsetInput.value);
+  const startX=Math.floor(captureCanvas.width/2+offset-slit/2);
+  const imageData=captureCtx.getImageData(startX,0,slit,captureCanvas.height);
+  const swTime=swRunning?swElapsed:0;
+  worker.postMessage({imageData,slit,swTime});
+  animationFrameId=requestAnimationFrame(scanFrame);
+}
+
+function startScanning(){
+  if(!stream) return;
+  scanning=true;
+  startButton.classList.add('hidden');
+  stopButton.classList.remove('hidden');
+  if(!worker) createWorker();
+  scanFrame();
+}
+
+function stopScanning(){
+  scanning=false;
+  startButton.classList.remove('hidden');
+  stopButton.classList.add('hidden');
+  if(animationFrameId) cancelAnimationFrame(animationFrameId);
+  swRunning=false; // ストップウォッチも停止
+}
+
+startButton.addEventListener('click', startScanning);
+stopButton.addEventListener('click', stopScanning);
+
+/* ---------- download ---------- */
+downloadButton.addEventListener('click', ()=>{
+  const link=document.createElement('a');
+  link.download=`scan_result_${Date.now()}.png`;
+  link.href=resultCanvas.toDataURL('image/png');
+  link.click();
+});
+
+/* ---------- result timeline click ---------- */
+resultCanvas.addEventListener('click', e=>{
+  const rect=resultCanvas.getBoundingClientRect();
+  const x=e.clientX-rect.left;
+  const line=document.createElement('div');
+  line.className='timeline-line';
+  line.style.left=x+'px';
+  resultContainer.appendChild(line);
+});
+
+/* ---------- init ---------- */
+updateStopwatchLoop();
+updateDeviceList();
+</script>
+</body>
+</html>
