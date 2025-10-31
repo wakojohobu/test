@@ -1,310 +1,1449 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ja">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>⏱タイム計測判定らくらく君</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<style>
-  :root { font-family: 'Inter', sans-serif; }
-  #result-container { overflow-x: auto; white-space: nowrap; cursor: grab; position: relative; }
-  #capture-canvas { position: fixed; top: -9999px; left: -9999px; }
-  #video { width: 100%; height: 100%; object-fit: cover; position: absolute; top:0; left:0; z-index:10; }
-  .scan-line { position:absolute; top:0; height:100%; pointer-events:none; opacity:0.75; z-index:30; }
-  .stopwatch { font-weight:bold; font-size:16px; }
-  .timeline-line { position:absolute; width:2px; top:0; height:100%; z-index:40; cursor:ew-resize; }
-  .timeline-slider { position:absolute; width:8px; height:24px; top:0; background:rgba(255,255,255,0.5); border-radius:4px; z-index:50; cursor:pointer; }
-  #result-canvas { display:block; }
-</style>
-</head>
-<body class="bg-gray-100 min-h-screen p-4 md:p-8">
-<div class="max-w-5xl mx-auto">
-  <h1 class="text-3xl font-extrabold text-indigo-700 mb-6 text-center">📸 着順タイム判定らくらく君（安定版）</h1>
-
-  <div id="message-box" class="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-800 p-4 rounded-lg mb-6 shadow-md">
-    <p class="font-bold">🏁 スキャン準備</p>
-    <p class="text-sm">カメラを起動して、スリット幅・ライン位置を設定してください。</p>
-  </div>
-
-  <div id="video-wrapper" class="relative w-full aspect-video bg-gray-800 rounded-xl overflow-hidden shadow-2xl mb-6 flex justify-center items-center">
-    <video id="video" playsinline autoplay muted class="hidden"></video>
-    <p id="video-placeholder" class="text-white text-center z-20">カメラ映像の準備中...</p>
-    <div id="scan-line" class="scan-line bg-red-500" style="left:50%; width:2px;"></div>
-  </div>
-
-  <div class="bg-white p-5 rounded-xl shadow-lg mb-6 flex flex-col md:flex-row gap-4 items-center justify-between">
-    <div class="flex flex-col w-full md:w-1/3">
-      <label for="camera-select" class="text-gray-700 text-sm font-semibold mb-1">カメラ選択:</label>
-      <select id="camera-select" class="p-2 border border-gray-300 rounded-lg shadow-sm bg-white text-gray-800 w-full" disabled>
-        <option value="">カメラを起動すると選択できます</option>
-      </select>
-    </div>
-    <div class="flex flex-col md:flex-row gap-4 w-full md:w-auto md:ml-4">
-      <button id="setup-camera-button" class="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg shadow-md">📷 カメラ起動</button>
-      <button id="start-button" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-lg shadow-md" disabled>▶️ スキャン開始</button>
-      <button id="stop-button" class="bg-red-500 hover:bg-red-600 text-white font-bold py-3 px-6 rounded-lg shadow-md hidden">⏹️ スキャン停止</button>
-    </div>
-  </div>
-
-  <div class="bg-white p-5 rounded-xl shadow-lg mb-6 flex flex-col md:flex-row gap-4 items-center">
-    <div class="flex items-center space-x-4">
-      <label for="scan-offset" class="text-gray-700 text-sm font-semibold whitespace-nowrap">判定ライン位置:</label>
-      <input type="range" id="scan-offset" min="-150" max="150" value="0" step="1" class="w-48 h-2 bg-gray-200 rounded-lg cursor-pointer">
-      <span id="offset-value" class="text-indigo-600 font-bold w-10 text-right">0</span>
-    </div>
-    <div class="flex items-center space-x-4">
-      <label for="slit-width" class="text-gray-700 text-sm font-semibold">スライス幅:</label>
-      <input type="range" id="slit-width" min="1" max="100" value="2" step="1" class="w-32 h-2 bg-gray-200 rounded-lg cursor-pointer">
-      <span id="slit-value" class="text-indigo-600 font-bold w-6 text-right">2</span>
-    </div>
-  </div>
-
-  <div class="bg-white p-5 rounded-xl shadow-lg mb-6 flex gap-4 items-center justify-center">
-    <div class="stopwatch text-2xl" id="stopwatch-display">00:00.00</div>
-    <button id="sw-start" class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-lg">▶️ スタート</button>
-    <button id="sw-stop" class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-lg">⏸️ ストップ</button>
-    <button id="sw-reset" class="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg">🔄 リセット</button>
-  </div>
-
-  <h2 class="text-xl font-semibold text-gray-800 mb-3">判定結果 (ラインスキャン画像)</h2>
-  <div id="result-container" class="w-full h-80 bg-gray-900 rounded-xl shadow-inner border border-gray-300 overflow-x-scroll relative">
-    <canvas id="result-canvas"></canvas>
-  </div>
-  <p class="text-sm text-gray-600 mt-2">左右にスクロールして着順を確認してください。クリックで縦線タイムライン追加。</p>
-  <div class="mt-6 text-center">
-    <button id="download-button" class="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-lg shadow-lg hidden">⬇️ 判定画像をダウンロード</button>
-  </div>
-
-  <canvas id="capture-canvas"></canvas>
-</div>
-
-<script>
-/* ---------- DOM ---------- */
-const video = document.getElementById('video');
-const videoPlaceholder = document.getElementById('video-placeholder');
-const captureCanvas = document.getElementById('capture-canvas');
-const captureCtx = captureCanvas.getContext('2d');
-const resultCanvas = document.getElementById('result-canvas');
-const resultCtx = resultCanvas.getContext('2d');
-const setupCameraButton = document.getElementById('setup-camera-button');
-const startButton = document.getElementById('start-button');
-const stopButton = document.getElementById('stop-button');
-const downloadButton = document.getElementById('download-button');
-const messageBox = document.getElementById('message-box');
-const scanLine = document.getElementById('scan-line');
-const scanOffsetInput = document.getElementById('scan-offset');
-const offsetValueSpan = document.getElementById('offset-value');
-const slitInput = document.getElementById('slit-width');
-const slitValueSpan = document.getElementById('slit-value');
-const resultContainer = document.getElementById('result-container');
-const cameraSelect = document.getElementById('camera-select');
-
-/* ---------- state ---------- */
-let stream=null, scanning=false, animationFrameId=null, videoDevices=[];
-let frameHeight=320, columnTimes=[], timelines=[];
-let worker=null;
-
-/* ---------- stopwatch ---------- */
-let swStart=0, swElapsed=0, swRunning=false;
-const swDisplay=document.getElementById('stopwatch-display');
-function formatTime(sec){
-  const m=Math.floor(sec/60);
-  const s=Math.floor(sec%60);
-  const cs=Math.floor((sec*100)%100);
-  return `${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}.${cs.toString().padStart(2,'0')}`;
-}
-function updateStopwatchLoop(){
-  if(swRunning) swElapsed=(performance.now()-swStart)/1000;
-  swDisplay.textContent=formatTime(swElapsed);
-  requestAnimationFrame(updateStopwatchLoop);
-}
-document.getElementById('sw-start').onclick=()=>{ if(!swRunning){ swRunning=true; swStart=performance.now()-swElapsed*1000; } };
-document.getElementById('sw-stop').onclick=()=>{ swRunning=false; };
-document.getElementById('sw-reset').onclick=()=>{ swRunning=false; swElapsed=0; swDisplay.textContent='00:00.00'; columnTimes=[]; };
-
-/* ---------- UI handlers ---------- */
-scanOffsetInput.addEventListener('input', e=>{
-  const val=parseInt(e.target.value);
-  offsetValueSpan.textContent=val;
-  scanLine.style.left=`calc(50% + ${val}px)`;
-});
-slitInput.addEventListener('input', e=>{
-  const val=parseInt(e.target.value);
-  slitValueSpan.textContent=val;
-});
-
-/* ---------- camera/device ---------- */
-async function updateDeviceList(selectedId=null){
-  const devices=await navigator.mediaDevices.enumerateDevices();
-  videoDevices=devices.filter(d=>d.kind==='videoinput');
-  cameraSelect.innerHTML='';
-  if(videoDevices.length===0){ cameraSelect.disabled=true; cameraSelect.innerHTML='<option>カメラなし</option>'; return; }
-  videoDevices.forEach((d,i)=>{ const opt=document.createElement('option'); opt.value=d.deviceId; opt.text=d.label||`カメラ ${i+1}`; cameraSelect.appendChild(opt); });
-  cameraSelect.disabled=false;
-  cameraSelect.value=selectedId||videoDevices[0].deviceId;
-}
-cameraSelect.addEventListener('change', ()=>{ if(scanning) stopScanning(); setupCamera(cameraSelect.value); });
-
-async function setupCamera(deviceId=null){
-  if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
-  setupCameraButton.disabled=true; startButton.disabled=true; cameraSelect.disabled=true;
-  messageBox.className='bg-blue-100 border-l-4 border-blue-500 text-blue-800 p-4 rounded-lg mb-6 shadow-md';
-  messageBox.innerHTML='<p class="font-bold">カメラ起動中...</p>';
-  let constraints={video:{width:{ideal:1280},height:{ideal:720},frameRate:{ideal:60}},audio:false};
-  if(deviceId) constraints.video.deviceId={exact:deviceId}; else constraints.video.facingMode='environment';
-  try{
-    stream=await navigator.mediaDevices.getUserMedia(constraints);
-    video.srcObject=stream;
-    await new Promise(resolve=>{ video.onloadedmetadata=()=>resolve(); });
-    captureCanvas.width=video.videoWidth; captureCanvas.height=video.videoHeight;
-    frameHeight=captureCanvas.height;
-    // resultCanvas初期化
-    resultCanvas.height=frameHeight; resultCanvas.width=1; resultCtx.clearRect(0,0,resultCanvas.width,resultCanvas.height); columnTimes=[];
-    await updateDeviceList();
-    startButton.disabled=false; cameraSelect.disabled=false;
-    video.classList.remove('hidden'); videoPlaceholder.classList.add('hidden');
-    messageBox.className='bg-green-100 border-l-4 border-green-500 text-green-800 p-4 rounded-lg mb-6 shadow-md';
-    messageBox.innerHTML='<p class="font-bold">✅ カメラ準備完了</p>';
-  }catch(err){
-    console.error(err);
-    messageBox.className='bg-red-100 border-l-4 border-red-500 text-red-800 p-4 rounded-lg mb-6 shadow-md';
-    messageBox.innerHTML=`<p class="font-bold">❌ カメラ起動失敗</p><p>${err.message}</p>`;
-    setupCameraButton.disabled=false;
-  }
-}
-setupCameraButton.addEventListener('click', ()=>setupCamera());
-
-/* ---------- Web Worker ---------- */
-function createWorker(){
-  // OpenCVの処理を削除し、純粋に画像データをメインスレッドに戻すWorker
-  const blob=new Blob([`
-    // importScripts('https://docs.opencv.org/4.8.1/opencv.js'); // OpenCVを無効化
+ <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>教室風オンライン掲示板</title>
+  <script src="/_sdk/element_sdk.js"></script>
+  <script src="/_sdk/data_sdk.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    html, body {
+      height: 100%;
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+    }
     
-    onmessage=function(e){
-      const {imageData, slit, swTime}=e.data;
-      // 画像データとタイムをメインスレッドに転送
-      // autoGoはここでは使用しないが、互換性のためfalseを渡す
-      postMessage({type:'result', slitImage:imageData, swTime, autoGo:false}, [imageData.data.buffer]); 
-    };
-  `],{type:'application/javascript'});
-  const url=URL.createObjectURL(blob);
-  worker=new Worker(url);
-  worker.onmessage=function(e){
-    const data=e.data;
-    if(data.type==='result'){
-      const slitImage=data.slitImage;
-      const swTime=data.swTime;
-      const autoGo=data.autoGo; // falseとして受け取る
+    /* 黒板のチョーク風テキスト */
+    .chalk-text {
+      text-shadow: 1px 1px 2px rgba(255, 255, 255, 0.3);
+    }
+    
+    /* 木目調の机 */
+    .desk {
+      background: linear-gradient(135deg, #d4a574 0%, #c89666 100%);
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    
+    .desk:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 12px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+    }
+    
+    /* 付箋風メモ */
+    .memo-note {
+      background: linear-gradient(135deg, #fef9c3 0%, #fde68a 100%);
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+    
+    /* 保護された投稿のスタイル */
+    .protected-memo {
+      background: linear-gradient(135deg, #e0f2fe 0%, #b3e5fc 100%);
+      border: 2px solid #0288d1;
+    }
+    
+    /* 自分の投稿のスタイル */
+    .own-memo {
+      background: linear-gradient(135deg, #f0f9ff 0%, #dbeafe 100%);
+      border: 2px solid #3b82f6;
+    }
+    
+    /* モーダルのアニメーション */
+    .modal-backdrop {
+      animation: fadeIn 0.2s ease-out;
+    }
+    
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    
+    .modal-content {
+      animation: slideUp 0.3s ease-out;
+    }
+    
+    @keyframes slideUp {
+      from {
+        opacity: 0;
+        transform: translateY(20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
 
-      // Canvas合成ロジックを修正
-      const prevWidth=resultCanvas.width;
-      const newWidth=prevWidth+slitImage.width;
+    /* 全画面レイアウト */
+    .full-screen-layout {
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .classroom-container {
+      flex: 1;
+      overflow: auto;
+    }
+    
+    /* 画像プレビュースタイル */
+    .image-preview {
+      max-width: 100%;
+      max-height: 200px;
+      object-fit: contain;
+      border-radius: 8px;
+      margin-top: 8px;
+    }
+    
+    .desk-image {
+      width: 100%;
+      height: auto;
+      max-height: 100%;
+      object-fit: contain;
+      border-radius: 4px;
+    }
+    
+    .image-drop-zone {
+      border: 2px dashed #cbd5e0;
+      border-radius: 8px;
+      padding: 20px;
+      text-align: center;
+      background-color: #f7fafc;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+    
+    .image-drop-zone:hover {
+      border-color: #3b82f6;
+      background-color: #eff6ff;
+    }
+    
+    .image-drop-zone.drag-over {
+      border-color: #3b82f6;
+      background-color: #dbeafe;
+    }
+  </style>
+  <style>@view-transition { navigation: auto; }</style>
+ </head>
+ <body class="h-full">
+  <div id="app" class="full-screen-layout"></div>
+  <script>
+    // ========================================
+    // 設定とデータ管理
+    // ========================================
+    
+    const defaultConfig = {
+      app_title: "教室オンライン掲示板✍まるルーム",
+      blackboard_placeholder: "今日のテーマや問題を入力してください...",
+      desk_label: "机",
+      desk_rows: "4",
+      desk_columns: "8",
+      background_color: "#f0f4f8",
+      blackboard_color: "#2d5016",
+      desk_color: "#d4a574",
+      text_color: "#1f2937",
+      button_color: "#3b82f6",
+      font_family: "sans-serif",
+      font_size: 16
+    };
+
+    let allMemos = [];
+    let currentPageId = "page-1";
+    let isTeacherMode = false;
+    let hideStudentPosts = false;
+    let currentUserId = null;
+    let pastedImageData = null; // ペーストされた画像データを一時保存
+
+    // ========================================
+    // ユーザー識別機能
+    // ========================================
+    
+    function getCurrentUserId() {
+      if (!currentUserId) {
+        currentUserId = localStorage.getItem('classroom_user_id');
+        if (!currentUserId) {
+          currentUserId = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+          localStorage.setItem('classroom_user_id', currentUserId);
+        }
+      }
+      return currentUserId;
+    }
+
+    function isPostAuthor(memo) {
+      return memo.author_id === getCurrentUserId();
+    }
+
+    // ========================================
+    // 画像処理機能
+    // ========================================
+    
+    // 画像を机のサイズに最適化
+    function resizeImageForDesk(imageData, maxWidth = 300, maxHeight = 300) {
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+          
+          // アスペクト比を維持しながらリサイズ
+          if (width > height) {
+            if (width > maxWidth) {
+              height *= maxWidth / width;
+              width = maxWidth;
+            }
+          } else {
+            if (height > maxHeight) {
+              width *= maxHeight / height;
+              height = maxHeight;
+            }
+          }
+          
+          canvas.width = width;
+          canvas.height = height;
+          
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+          
+          // 圧縮してBase64に変換
+          resolve(canvas.toDataURL('image/jpeg', 0.8));
+        };
+        img.src = imageData;
+      });
+    }
+    
+    // クリップボードから画像を取得
+    async function handlePaste(event) {
+      const items = (event.clipboardData || event.originalEvent.clipboardData).items;
       
-      const off=document.createElement('canvas');
-      off.width=newWidth; off.height=frameHeight;
-      const offCtx=off.getContext('2d');
-      
-      // 既存の画像をオフスクリーンに描画
-      if(prevWidth>0) offCtx.drawImage(resultCanvas,0,0);
-      
-      // 新しいスリットを一時Canvasから描画
-      const tmp=document.createElement('canvas');
-      tmp.width=slitImage.width; tmp.height=slitImage.height;
-      tmp.getContext('2d').putImageData(slitImage,0,0);
-      offCtx.drawImage(tmp,prevWidth,0);
-      
-      // 結果Canvasを更新
-      resultCanvas.width=newWidth; 
-      resultCanvas.height=frameHeight; 
-      resultCtx.drawImage(off,0,0);
-      
-      // タイムラインの記録（autoGo判定ロジックは一旦無視）
-      if(swTime!==0){ // ストップウォッチが動いていれば記録
-         columnTimes.push(swTime);
-         // タイムラインマーカーを引く（ここではautoGo判定を無視して常に引く）
-         // const x=resultCanvas.width-1; // スリット幅が1の場合は-1
-         // resultCtx.fillStyle='lime';
-         // resultCtx.fillRect(x,0,2,resultCanvas.height);
+      for (let item of items) {
+        if (item.type.indexOf('image') !== -1) {
+          event.preventDefault();
+          const blob = item.getAsFile();
+          const reader = new FileReader();
+          
+          reader.onload = async (e) => {
+            const resizedImage = await resizeImageForDesk(e.target.result);
+            pastedImageData = resizedImage;
+            
+            // プレビューを更新
+            const preview = document.getElementById('image-preview');
+            if (preview) {
+              preview.src = resizedImage;
+              preview.style.display = 'block';
+              document.getElementById('image-drop-zone').style.display = 'none';
+              document.getElementById('remove-image-btn').style.display = 'inline-block';
+            }
+            
+            showToast("画像が貼り付けられました（Ctrl+Vで貼り付け）");
+          };
+          
+          reader.readAsDataURL(blob);
+          break;
+        }
+      }
+    }
+    
+    // ファイル選択から画像を読み込み
+    async function handleFileSelect(file) {
+      if (!file || !file.type.startsWith('image/')) {
+        showToast("画像ファイルを選択してください", "error");
+        return;
       }
       
-      if(resultCanvas.width>0) downloadButton.classList.remove('hidden');
-
-      // スクロールして最新のフレームを表示
-      resultContainer.scrollLeft = resultContainer.scrollWidth;
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const resizedImage = await resizeImageForDesk(e.target.result);
+        pastedImageData = resizedImage;
+        
+        const preview = document.getElementById('image-preview');
+        if (preview) {
+          preview.src = resizedImage;
+          preview.style.display = 'block';
+          document.getElementById('image-drop-zone').style.display = 'none';
+          document.getElementById('remove-image-btn').style.display = 'inline-block';
+        }
+        
+        showToast("画像がアップロードされました");
+      };
+      
+      reader.readAsDataURL(file);
     }
-  };
-}
+    
+    // 画像を削除
+    window.removeImage = function() {
+      pastedImageData = null;
+      const preview = document.getElementById('image-preview');
+      if (preview) {
+        preview.style.display = 'none';
+        preview.src = '';
+        document.getElementById('image-drop-zone').style.display = 'block';
+        document.getElementById('remove-image-btn').style.display = 'none';
+      }
+    };
 
-/* ---------- scanning loop ---------- */
-function scanFrame(){
-  if(!scanning) return;
-  captureCtx.drawImage(video,0,0,captureCanvas.width,captureCanvas.height);
-  const slit=parseInt(slitInput.value);
-  const offset=parseInt(scanOffsetInput.value);
-  const startX=Math.floor(captureCanvas.width/2+offset-slit/2);
-  const imageData=captureCtx.getImageData(startX,0,slit,captureCanvas.height);
-  const swTime=swRunning?swElapsed:0;
+    // ========================================
+    // Data SDK初期化
+    // ========================================
+    
+    const dataHandler = {
+      onDataChanged(data) {
+        allMemos = data;
+        hideStudentPosts = getCurrentPostVisibilitySettings();
+        renderApp();
+      }
+    };
 
-  // 修正: imageData.data.bufferをTransferableとして転送
-  worker.postMessage({imageData,slit,swTime}, [imageData.data.buffer]); 
+    async function initializeDataSdk() {
+      const result = await window.dataSdk.init(dataHandler);
+      if (!result.isOk) {
+        showToast("データの初期化に失敗しました", "error");
+      }
+    }
 
-  animationFrameId=requestAnimationFrame(scanFrame);
-}
+    // ========================================
+    // Element SDK初期化
+    // ========================================
+    
+    async function initializeElementSdk() {
+      if (!window.elementSdk) return;
+      
+      await window.elementSdk.init({
+        defaultConfig,
+        onConfigChange: async (config) => {
+          const appTitle = document.getElementById('app-title');
+          const blackboardTextarea = document.getElementById('blackboard-textarea');
+          const body = document.body;
+          
+          if (appTitle) {
+            appTitle.textContent = config.app_title || defaultConfig.app_title;
+            appTitle.style.fontFamily = `${config.font_family || defaultConfig.font_family}, sans-serif`;
+            appTitle.style.fontSize = `${(config.font_size || defaultConfig.font_size) * 1.5}px`;
+            appTitle.style.color = config.text_color || defaultConfig.text_color;
+          }
+          
+          if (blackboardTextarea) {
+            blackboardTextarea.placeholder = config.blackboard_placeholder || defaultConfig.blackboard_placeholder;
+            blackboardTextarea.style.fontFamily = `${config.font_family || defaultConfig.font_family}, monospace`;
+            blackboardTextarea.style.fontSize = `${(config.font_size || defaultConfig.font_size) * 1.125}px`;
+          }
+          
+          if (body) {
+            body.style.backgroundColor = config.background_color || defaultConfig.background_color;
+          }
+          
+          const desks = document.querySelectorAll('.desk');
+          desks.forEach(desk => {
+            desk.style.background = `linear-gradient(135deg, ${config.desk_color || defaultConfig.desk_color} 0%, ${adjustColor(config.desk_color || defaultConfig.desk_color, -10)} 100%)`;
+          });
+          
+          const buttons = document.querySelectorAll('.action-button');
+          buttons.forEach(button => {
+            button.style.backgroundColor = config.button_color || defaultConfig.button_color;
+            button.style.fontFamily = `${config.font_family || defaultConfig.font_family}, sans-serif`;
+            button.style.fontSize = `${(config.font_size || defaultConfig.font_size) * 0.875}px`;
+          });
+          
+          const blackboard = document.getElementById('blackboard');
+          if (blackboard) {
+            blackboard.style.backgroundColor = config.blackboard_color || defaultConfig.blackboard_color;
+          }
+          
+          const allText = document.querySelectorAll('p, span, label, div');
+          allText.forEach(el => {
+            if (!el.classList.contains('action-button') && !el.id.includes('title')) {
+              el.style.fontFamily = `${config.font_family || defaultConfig.font_family}, sans-serif`;
+              el.style.fontSize = `${config.font_size || defaultConfig.font_size}px`;
+            }
+          });
+        },
+        mapToCapabilities: (config) => ({
+          recolorables: [
+            {
+              get: () => config.background_color || defaultConfig.background_color,
+              set: (value) => {
+                if (window.elementSdk) {
+                  window.elementSdk.setConfig({ background_color: value });
+                }
+              }
+            },
+            {
+              get: () => config.blackboard_color || defaultConfig.blackboard_color,
+              set: (value) => {
+                if (window.elementSdk) {
+                  window.elementSdk.setConfig({ blackboard_color: value });
+                }
+              }
+            },
+            {
+              get: () => config.text_color || defaultConfig.text_color,
+              set: (value) => {
+                if (window.elementSdk) {
+                  window.elementSdk.setConfig({ text_color: value });
+                }
+              }
+            },
+            {
+              get: () => config.button_color || defaultConfig.button_color,
+              set: (value) => {
+                if (window.elementSdk) {
+                  window.elementSdk.setConfig({ button_color: value });
+                }
+              }
+            },
+            {
+              get: () => config.desk_color || defaultConfig.desk_color,
+              set: (value) => {
+                if (window.elementSdk) {
+                  window.elementSdk.setConfig({ desk_color: value });
+                }
+              }
+            }
+          ],
+          borderables: [],
+          fontEditable: {
+            get: () => config.font_family || defaultConfig.font_family,
+            set: (value) => {
+              if (window.elementSdk) {
+                window.elementSdk.setConfig({ font_family: value });
+              }
+            }
+          },
+          fontSizeable: {
+            get: () => config.font_size || defaultConfig.font_size,
+            set: (value) => {
+              if (window.elementSdk) {
+                window.elementSdk.setConfig({ font_size: value });
+              }
+            }
+          }
+        }),
+        mapToEditPanelValues: (config) => new Map([
+          ["app_title", config.app_title || defaultConfig.app_title],
+          ["blackboard_placeholder", config.blackboard_placeholder || defaultConfig.blackboard_placeholder],
+          ["desk_label", config.desk_label || defaultConfig.desk_label],
+          ["desk_rows", config.desk_rows || defaultConfig.desk_rows],
+          ["desk_columns", config.desk_columns || defaultConfig.desk_columns]
+        ])
+      });
+    }
 
-function startScanning(){
-  if(!stream) return;
-  scanning=true;
-  startButton.classList.add('hidden');
-  stopButton.classList.remove('hidden');
-  if(!worker) createWorker();
-  scanFrame();
-}
+    // ========================================
+    // ユーティリティ関数
+    // ========================================
+    
+    function adjustColor(color, amount) {
+      const num = parseInt(color.replace("#", ""), 16);
+      const r = Math.max(0, Math.min(255, (num >> 16) + amount));
+      const g = Math.max(0, Math.min(255, ((num >> 8) & 0x00FF) + amount));
+      const b = Math.max(0, Math.min(255, (num & 0x0000FF) + amount));
+      return "#" + ((r << 16) | (g << 8) | b).toString(16).padStart(6, '0');
+    }
 
-function stopScanning(){
-  scanning=false;
-  startButton.classList.remove('hidden');
-  stopButton.classList.add('hidden');
-  if(animationFrameId) cancelAnimationFrame(animationFrameId);
-  swRunning=false; // ストップウォッチも停止
-}
+    function convertUrlsToLinks(text, isBlackboard = false) {
+      if (!text) return '';
+      
+      const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+)/gi;
+      
+      return text.replace(urlRegex, (url) => {
+        const href = url.startsWith('www.') ? `https://${url}` : url;
+        const linkClass = isBlackboard ? 
+          "text-white hover:text-gray-200 underline break-all" : 
+          "text-blue-600 hover:text-blue-800 underline break-all";
+        return `<a href="${href}" target="_blank" rel="noopener noreferrer" class="${linkClass}" onclick="event.stopPropagation()">${url}</a>`;
+      });
+    }
 
-startButton.addEventListener('click', startScanning);
-stopButton.addEventListener('click', stopScanning);
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
 
-/* ---------- download ---------- */
-downloadButton.addEventListener('click', ()=>{
-  const link=document.createElement('a');
-  link.download=`scan_result_${Date.now()}.png`;
-  link.href=resultCanvas.toDataURL('image/png');
-  link.click();
-});
+    function showToast(message, type = "success") {
+      const toast = document.createElement('div');
+      toast.className = `fixed top-4 right-4 px-6 py-3 rounded-lg shadow-lg text-white z-50 ${type === 'error' ? 'bg-red-500' : 'bg-green-500'}`;
+      toast.textContent = message;
+      document.body.appendChild(toast);
+      
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transition = 'opacity 0.3s';
+        setTimeout(() => toast.remove(), 300);
+      }, 3000);
+    }
 
-/* ---------- result timeline click ---------- */
-resultCanvas.addEventListener('click', e=>{
-  const rect=resultCanvas.getBoundingClientRect();
-  const x=e.clientX-rect.left + resultContainer.scrollLeft; // スクロール位置を考慮
-  const line=document.createElement('div');
-  line.className='timeline-line bg-lime-400';
-  line.style.left=x+'px';
-  
-  // タイムを表示する要素を追加
-  const index = Math.floor(x / resultCanvas.width * columnTimes.length);
-  const time = columnTimes[index] !== undefined ? formatTime(columnTimes[index]) : 'N/A';
-  
-  const slider = document.createElement('div');
-  slider.className = 'timeline-slider bg-lime-600 text-white text-xs text-center p-1';
-  slider.textContent = time;
-  slider.style.left = (x-4)+'px';
-  slider.style.top = '5px';
+    function getConfig() {
+      return window.elementSdk?.config || defaultConfig;
+    }
 
-  line.appendChild(slider);
+    function getCurrentBlackboardContent() {
+      const blackboardData = allMemos.find(m => 
+        m.page_id === currentPageId && 
+        m.content_type === 'blackboard'
+      );
+      return blackboardData?.blackboard_content || '';
+    }
 
-  resultContainer.appendChild(line);
-});
+    function getCurrentDeskLayout() {
+      const layoutData = allMemos.find(m => 
+        m.page_id === currentPageId && 
+        m.content_type === 'desk_layout'
+      );
+      return {
+        rows: layoutData?.desk_rows || parseInt(defaultConfig.desk_rows),
+        columns: layoutData?.desk_columns || parseInt(defaultConfig.desk_columns)
+      };
+    }
 
-/* ---------- init ---------- */
-updateStopwatchLoop();
-updateDeviceList();
-</script>
-</body>
+    // ========================================
+    // データ操作関数
+    // ========================================
+    
+    async function saveMemo(deskNumber, studentName, memoContent, imageData = null) {
+      if (allMemos.length >= 999) {
+        showToast("メモの上限（999件）に達しました", "error");
+        return;
+      }
+
+      const result = await window.dataSdk.create({
+        page_id: currentPageId,
+        desk_number: deskNumber,
+        student_name: studentName,
+        memo_content: memoContent,
+        image_data: imageData,
+        content_type: "memo",
+        is_selected: false,
+        author_id: getCurrentUserId(),
+        created_at: new Date().toISOString()
+      });
+
+      if (result.isOk) {
+        showToast("メモを保存しました");
+      } else {
+        showToast("メモの保存に失敗しました", "error");
+      }
+    }
+
+    async function updateMemo(memo, studentName, memoContent, imageData = null) {
+      const result = await window.dataSdk.update({
+        ...memo,
+        student_name: studentName,
+        memo_content: memoContent,
+        image_data: imageData !== null ? imageData : memo.image_data
+      });
+
+      if (result.isOk) {
+        showToast("メモを更新しました");
+      } else {
+        showToast("メモの更新に失敗しました", "error");
+      }
+    }
+
+    async function toggleMemoSelection(memo) {
+      const result = await window.dataSdk.update({
+        ...memo,
+        is_selected: !memo.is_selected
+      });
+
+      if (result.isOk) {
+        showToast(memo.is_selected ? "投稿の選択を解除しました" : "投稿を選択しました");
+      } else {
+        showToast("投稿選択の更新に失敗しました", "error");
+      }
+    }
+
+    async function deleteMemo(memo) {
+      const result = await window.dataSdk.delete(memo);
+
+      if (result.isOk) {
+        showToast("メモを削除しました");
+      } else {
+        showToast("メモの削除に失敗しました", "error");
+      }
+    }
+
+    async function saveBlackboardContent(content) {
+      if (allMemos.length >= 999) {
+        showToast("データの上限（999件）に達しました", "error");
+        return;
+      }
+
+      const existingBlackboard = allMemos.find(m => 
+        m.page_id === currentPageId && 
+        m.content_type === 'blackboard'
+      );
+
+      if (existingBlackboard) {
+        const result = await window.dataSdk.update({
+          ...existingBlackboard,
+          blackboard_content: content
+        });
+
+        if (result.isOk) {
+          showToast("黒板を更新しました");
+        } else {
+          showToast("黒板の更新に失敗しました", "error");
+        }
+      } else {
+        const result = await window.dataSdk.create({
+          page_id: currentPageId,
+          desk_number: 0,
+          student_name: "",
+          memo_content: "",
+          blackboard_content: content,
+          content_type: "blackboard",
+          created_at: new Date().toISOString()
+        });
+
+        if (result.isOk) {
+          showToast("黒板を保存しました");
+        } else {
+          showToast("黒板の保存に失敗しました", "error");
+        }
+      }
+    }
+
+    async function saveDeskLayout(rows, columns) {
+      if (allMemos.length >= 999) {
+        showToast("データの上限（999件）に達しました", "error");
+        return;
+      }
+
+      const existingLayout = allMemos.find(m => 
+        m.page_id === currentPageId && 
+        m.content_type === 'desk_layout'
+      );
+
+      if (existingLayout) {
+        const result = await window.dataSdk.update({
+          ...existingLayout,
+          desk_rows: rows,
+          desk_columns: columns
+        });
+
+        if (result.isOk) {
+          showToast("机配置を更新しました");
+        } else {
+          showToast("机配置の更新に失敗しました", "error");
+        }
+      } else {
+        const result = await window.dataSdk.create({
+          page_id: currentPageId,
+          desk_number: 0,
+          student_name: "",
+          memo_content: "",
+          desk_rows: rows,
+          desk_columns: columns,
+          content_type: "desk_layout",
+          created_at: new Date().toISOString()
+        });
+
+        if (result.isOk) {
+          showToast("机配置を保存しました");
+        } else {
+          showToast("机配置の保存に失敗しました", "error");
+        }
+      }
+    }
+
+    // ========================================
+    // モーダル管理
+    // ========================================
+    
+    function openDeskModal(deskNumber) {
+      const existingMemo = allMemos.find(m => m.page_id === currentPageId && m.desk_number === deskNumber);
+      
+      const isAuthor = existingMemo ? isPostAuthor(existingMemo) : true;
+      const isReadOnly = !isTeacherMode && existingMemo && !isAuthor;
+      
+      // 既存の画像データを設定
+      pastedImageData = existingMemo?.image_data || null;
+      
+      const modal = document.createElement('div');
+      modal.className = 'modal-backdrop fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50';
+      modal.onclick = (e) => {
+        if (e.target === modal) {
+          pastedImageData = null;
+          closeModal(modal);
+        }
+      };
+
+      const config = getConfig();
+      
+      let statusMessage = '';
+      let statusColor = '';
+      let statusIcon = '';
+      
+      if (existingMemo) {
+        if (isTeacherMode) {
+          statusMessage = '教師モード：全ての投稿を編集・削除できます';
+          statusColor = 'text-green-800';
+          statusIcon = '👨‍🏫';
+        } else if (isAuthor) {
+          statusMessage = 'あなたの投稿：編集・削除できます';
+          statusColor = 'text-blue-800';
+          statusIcon = '✏️';
+        } else {
+          statusMessage = '他の生徒の投稿：読み取り専用です';
+          statusColor = 'text-orange-800';
+          statusIcon = '🔒';
+        }
+      }
+      
+      modal.innerHTML = `
+        <div class="modal-content bg-white rounded-lg shadow-xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto">
+          <div class="flex justify-between items-center mb-4">
+            <h3 class="text-xl font-bold" style="color: ${config.text_color}; font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 1.25}px;">${config.desk_label} ${deskNumber}</h3>
+            <div class="flex gap-2">
+              ${existingMemo && (isTeacherMode || isAuthor) ? `
+                <button onclick="handleDeleteMemo('${existingMemo.__backendId}')" 
+                        class="action-button px-3 py-1 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+                        style="font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">
+                  削除
+                </button>
+              ` : ''}
+              <button onclick="pastedImageData = null; this.closest('.modal-backdrop').remove()" 
+                      class="px-3 py-1 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors"
+                      style="font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">
+                ${isReadOnly ? '閉じる' : 'キャンセル'}
+              </button>
+              ${!isReadOnly ? `
+                <button onclick="handleSaveMemo(${deskNumber}, ${existingMemo ? `'${existingMemo.__backendId}'` : 'null'})" 
+                        class="action-button px-3 py-1 text-white rounded-lg transition-colors"
+                        style="background-color: ${config.button_color}; font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">
+                  保存
+                </button>
+              ` : ''}
+            </div>
+          </div>
+          
+          ${existingMemo && statusMessage ? `
+            <div class="bg-gray-50 border border-gray-200 rounded-lg p-3 mb-4">
+              <div class="flex items-center gap-2">
+                <span class="text-lg">${statusIcon}</span>
+                <span class="${statusColor} font-medium text-sm" style="font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">
+                  ${statusMessage}
+                </span>
+              </div>
+            </div>
+          ` : ''}
+          
+          ${isReadOnly ? `
+            <!-- 読み取り専用表示 -->
+            <div class="space-y-4">
+              <div>
+                <label class="block text-sm font-medium mb-2" style="color: ${config.text_color}; font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">投稿者</label>
+                <div class="w-full px-3 py-2 bg-gray-100 border border-gray-300 rounded-lg" 
+                     style="font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size}px;">
+                  ${existingMemo?.student_name || '（名前なし）'}
+                </div>
+              </div>
+              
+              ${existingMemo?.image_data ? `
+                <div>
+                  <label class="block text-sm font-medium mb-2" style="color: ${config.text_color}; font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">画像</label>
+                  <img src="${existingMemo.image_data}" class="image-preview" alt="投稿画像" onclick="window.open(this.src)" style="cursor: pointer;">
+                </div>
+              ` : ''}
+              
+              <div>
+                <label class="block text-sm font-medium mb-2" style="color: ${config.text_color}; font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">メモ内容</label>
+                <div class="w-full px-3 py-2 bg-gray-100 border border-gray-300 rounded-lg min-h-32 whitespace-pre-wrap" 
+                     style="font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size}px;">
+                  ${convertUrlsToLinks(escapeHtml(existingMemo?.memo_content || '（内容なし）'))}
+                </div>
+              </div>
+            </div>
+          ` : `
+            <!-- 編集可能表示 -->
+            <div class="space-y-4">
+              <div>
+                <label class="block text-sm font-medium mb-2" style="color: ${config.text_color}; font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">名前</label>
+                <input type="text" id="student-name" value="${existingMemo?.student_name || ''}" 
+                       class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                       placeholder="名前を入力"
+                       style="font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size}px;">
+              </div>
+              
+              <div>
+                <label class="block text-sm font-medium mb-2" style="color: ${config.text_color}; font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">
+                  画像 📸 <span class="text-xs text-gray-500">(Ctrl+Vで貼り付け、またはクリックしてアップロード)</span>
+                </label>
+                <input type="file" id="image-file-input" accept="image/*" style="display: none;" onchange="handleFileInputChange(this)">
+                <div id="image-drop-zone" class="image-drop-zone" onclick="document.getElementById('image-file-input').click()" ${pastedImageData ? 'style="display: none;"' : ''}>
+                  <div style="font-size: 48px; margin-bottom: 8px;">📷</div>
+                  <p style="color: #4a5568; font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">
+                    Ctrl+Vで画像を貼り付け<br>またはクリックしてファイル選択
+                  </p>
+                </div>
+                <img id="image-preview" class="image-preview" ${pastedImageData ? `src="${pastedImageData}"` : ''} style="${pastedImageData ? '' : 'display: none;'}" alt="プレビュー">
+                <button id="remove-image-btn" onclick="removeImage()" 
+                        class="mt-2 px-3 py-1 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors text-sm"
+                        style="${pastedImageData ? '' : 'display: none;'}; font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.75}px;">
+                  ❌ 画像を削除
+                </button>
+              </div>
+              
+              <div>
+                <label class="block text-sm font-medium mb-2" style="color: ${config.text_color}; font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">メモ</label>
+                <textarea id="memo-content" rows="6" 
+                          class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                          placeholder="メモを入力してください..."
+                          style="font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size}px;">${existingMemo?.memo_content || ''}</textarea>
+              </div>
+            </div>
+          `}
+        </div>
+      `;
+      
+      document.body.appendChild(modal);
+      
+      // ペーストイベントリスナーを追加
+      if (!isReadOnly) {
+        modal.addEventListener('paste', handlePaste);
+      }
+    }
+
+    function closeModal(modal) {
+      modal.remove();
+    }
+    
+    window.handleFileInputChange = function(input) {
+      if (input.files && input.files[0]) {
+        handleFileSelect(input.files[0]);
+      }
+    };
+
+    window.handleSaveMemo = async function(deskNumber, memoId) {
+      const studentName = document.getElementById('student-name').value.trim();
+      const memoContent = document.getElementById('memo-content').value.trim();
+      
+      if (!studentName && !memoContent && !pastedImageData) {
+        showToast("名前、メモ、または画像のいずれかを入力してください", "error");
+        return;
+      }
+      
+      const modal = document.querySelector('.modal-backdrop');
+      
+      if (memoId) {
+        const memo = allMemos.find(m => m.__backendId === memoId);
+        if (memo) {
+          await updateMemo(memo, studentName, memoContent, pastedImageData);
+        }
+      } else {
+        await saveMemo(deskNumber, studentName, memoContent, pastedImageData);
+      }
+      
+      pastedImageData = null;
+      if (modal) modal.remove();
+    };
+
+    window.handleDeleteMemo = async function(memoId) {
+      const memo = allMemos.find(m => m.__backendId === memoId);
+      if (memo) {
+        const modal = document.querySelector('.modal-backdrop');
+        await deleteMemo(memo);
+        pastedImageData = null;
+        if (modal) modal.remove();
+      }
+    };
+
+    window.toggleMemoSelection = async function(memoId) {
+      const memo = allMemos.find(m => m.__backendId === memoId);
+      if (memo) {
+        await toggleMemoSelection(memo);
+      }
+    };
+
+    function openBlackboardModal() {
+      const currentContent = getCurrentBlackboardContent();
+      
+      const modal = document.createElement('div');
+      modal.className = 'modal-backdrop fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50';
+      modal.onclick = (e) => {
+        if (e.target === modal) closeModal(modal);
+      };
+
+      const config = getConfig();
+      
+      modal.innerHTML = `
+        <div class="modal-content bg-white rounded-lg shadow-xl max-w-2xl w-full p-6">
+          <div class="flex justify-between items-center mb-4">
+            <h3 class="text-xl font-bold" style="color: ${config.text_color}; font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 1.25}px;">📋 黒板の編集</h3>
+            <button onclick="this.closest('.modal-backdrop').remove()" class="text-gray-500 hover:text-gray-700 text-2xl leading-none">&times;</button>
+          </div>
+          
+          <div class="space-y-4">
+            <div>
+              <label class="block text-sm font-medium mb-2" style="color: ${config.text_color}; font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">黒板の内容</label>
+              <textarea id="blackboard-modal-content" rows="8" 
+                        class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                        placeholder="${config.blackboard_placeholder}"
+                        style="font-family: ${config.font_family}, monospace; font-size: ${config.font_size}px;">${currentContent}</textarea>
+            </div>
+            
+            <div class="flex gap-2 justify-end">
+              <button onclick="this.closest('.modal-backdrop').remove()" 
+                      class="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors"
+                      style="font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">
+                キャンセル
+              </button>
+              <button onclick="handleSaveBlackboard()" 
+                      class="action-button px-4 py-2 text-white rounded-lg transition-colors"
+                      style="background-color: ${config.button_color}; font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+      
+      document.body.appendChild(modal);
+    }
+
+    window.handleSaveBlackboard = async function() {
+      const content = document.getElementById('blackboard-modal-content').value;
+      const modal = document.querySelector('.modal-backdrop');
+      
+      await saveBlackboardContent(content);
+      
+      if (modal) modal.remove();
+    };
+
+    function showResetConfirmModal() {
+      const modal = document.createElement('div');
+      modal.className = 'modal-backdrop fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50';
+      modal.onclick = (e) => {
+        if (e.target === modal) closeModal(modal);
+      };
+
+      const config = getConfig();
+      
+      modal.innerHTML = `
+        <div class="modal-content bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+          <div class="flex justify-between items-center mb-4">
+            <h3 class="text-xl font-bold text-red-600" style="font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 1.25}px;">⚠️ 全投稿リセット確認</h3>
+            <button onclick="this.closest('.modal-backdrop').remove()" class="text-gray-500 hover:text-gray-700 text-2xl leading-none">&times;</button>
+          </div>
+          
+          <div class="space-y-4">
+            <div class="bg-red-50 border border-red-200 rounded-lg p-4">
+              <p class="text-red-800" style="font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size}px;">
+                <strong>注意：</strong>この操作により、以下のデータが完全に削除されます：
+              </p>
+              <ul class="mt-2 text-red-700 list-disc list-inside" style="font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">
+                <li>全ページの生徒メモ</li>
+                <li>黒板の内容</li>
+                <li>机配置設定</li>
+              </ul>
+              <p class="mt-2 text-red-800 font-semibold" style="font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">
+                この操作は取り消すことができません。
+              </p>
+            </div>
+            
+            <div class="flex gap-2 justify-end">
+              <button onclick="this.closest('.modal-backdrop').remove()" 
+                      class="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors"
+                      style="font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">
+                キャンセル
+              </button>
+              <button onclick="handleResetAllData()" 
+                      class="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+                      style="font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">
+                🗑️ 全て削除する
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+      
+      document.body.appendChild(modal);
+    }
+
+    window.handleResetAllData = async function() {
+      const modal = document.querySelector('.modal-backdrop');
+      
+      const deletePromises = allMemos.map(memo => window.dataSdk.delete(memo));
+      
+      try {
+        const results = await Promise.all(deletePromises);
+        const failedDeletes = results.filter(result => !result.isOk);
+        
+        if (failedDeletes.length === 0) {
+          showToast("全ての投稿を削除しました");
+        } else {
+          showToast(`${failedDeletes.length}件の削除に失敗しました`, "error");
+        }
+      } catch (error) {
+        showToast("削除処理中にエラーが発生しました", "error");
+      }
+      
+      if (modal) modal.remove();
+    };
+
+    window.showResetConfirmModal = showResetConfirmModal;
+
+    // ========================================
+    // 投稿表示切り替え
+    // ========================================
+    
+    async function savePostVisibilitySettings(isHidden) {
+      if (allMemos.length >= 999) {
+        showToast("データの上限（999件）に達しました", "error");
+        return;
+      }
+
+      const existingSettings = allMemos.find(m => 
+        m.page_id === currentPageId && 
+        m.content_type === 'post_visibility'
+      );
+
+      if (existingSettings) {
+        const result = await window.dataSdk.update({
+          ...existingSettings,
+          hide_student_posts: isHidden
+        });
+
+        if (!result.isOk) {
+          showToast("設定の更新に失敗しました", "error");
+        }
+      } else {
+        const result = await window.dataSdk.create({
+          page_id: currentPageId,
+          desk_number: 0,
+          student_name: "",
+          memo_content: "",
+          hide_student_posts: isHidden,
+          content_type: "post_visibility",
+          created_at: new Date().toISOString()
+        });
+
+        if (!result.isOk) {
+          showToast("設定の保存に失敗しました", "error");
+        }
+      }
+    }
+
+    function getCurrentPostVisibilitySettings() {
+      const visibilityData = allMemos.find(m => 
+        m.page_id === currentPageId && 
+        m.content_type === 'post_visibility'
+      );
+      return visibilityData?.hide_student_posts || false;
+    }
+    
+    window.togglePostVisibility = async function() {
+      hideStudentPosts = !hideStudentPosts;
+      await savePostVisibilitySettings(hideStudentPosts);
+      renderApp();
+      
+      if (hideStudentPosts) {
+        showToast("投稿を隠しました。👀/😎アイコンで個別に表示制御できます");
+      } else {
+        showToast("投稿を表示しました");
+      }
+    };
+
+    window.toggleIndividualDeskVisibility = async function(memoId) {
+      const memo = allMemos.find(m => m.__backendId === memoId);
+      if (!memo) return;
+
+      const result = await window.dataSdk.update({
+        ...memo,
+        is_selected: !memo.is_selected
+      });
+
+      if (result.isOk) {
+        const action = memo.is_selected ? "非表示" : "表示";
+        showToast(`机${memo.desk_number}の投稿を生徒に${action}にしました`);
+      } else {
+        showToast("表示設定の更新に失敗しました", "error");
+      }
+    };
+
+    // ========================================
+    // ページ管理
+    // ========================================
+    
+    function goToPreviousPage() {
+      const pageNum = parseInt(currentPageId.split('-')[1]);
+      if (pageNum > 1) {
+        currentPageId = `page-${pageNum - 1}`;
+        hideStudentPosts = getCurrentPostVisibilitySettings();
+        renderApp();
+      }
+    }
+
+    function goToNextPage() {
+      const pageNum = parseInt(currentPageId.split('-')[1]);
+      currentPageId = `page-${pageNum + 1}`;
+      hideStudentPosts = getCurrentPostVisibilitySettings();
+      renderApp();
+    }
+
+    // ========================================
+    // レンダリング
+    // ========================================
+    
+    function renderApp() {
+      const config = getConfig();
+      const app = document.getElementById('app');
+      const currentPageMemos = allMemos.filter(m => 
+        m.page_id === currentPageId && 
+        (m.content_type === 'memo' || (!m.content_type && m.desk_number > 0))
+      );
+      const pageNum = parseInt(currentPageId.split('-')[1]);
+      const currentLayout = getCurrentDeskLayout();
+      
+      app.innerHTML = `
+        <!-- ヘッダー -->
+        <div class="bg-white shadow-sm px-6 py-3 flex-shrink-0">
+          <div class="flex items-center justify-between">
+            <h1 id="app-title" class="text-2xl font-bold" style="color: ${config.text_color}; font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 1.5}px;">
+              ${config.app_title}
+            </h1>
+            <div class="flex items-center gap-4">
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" ${isTeacherMode ? 'checked' : ''} onchange="toggleTeacherMode(this)" class="w-4 h-4">
+                <span style="color: ${config.text_color}; font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">教師モード</span>
+              </label>
+              ${isTeacherMode ? `
+                <div class="flex items-center gap-4">
+                  <div class="flex items-center gap-2">
+                    <span style="color: ${config.text_color}; font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">机配置:</span>
+                    <input type="number" min="1" max="10" value="${currentLayout.rows}" 
+                           id="desk-rows-input"
+                           class="w-16 px-2 py-1 border border-gray-300 rounded text-center"
+                           style="font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">
+                    <span style="color: ${config.text_color}; font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">×</span>
+                    <input type="number" min="1" max="10" value="${currentLayout.columns}" 
+                           id="desk-columns-input"
+                           class="w-16 px-2 py-1 border border-gray-300 rounded text-center"
+                           style="font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">
+                    <button onclick="applyDeskLayout()" 
+                            class="action-button px-3 py-1 text-white rounded-lg transition-colors"
+                            style="background-color: ${config.button_color}; font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">
+                      実行
+                    </button>
+                  </div>
+                  <button onclick="togglePostVisibility()" 
+                          class="px-3 py-1 text-white rounded-lg transition-colors"
+                          style="background-color: ${hideStudentPosts ? '#f59e0b' : '#10b981'}; font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">
+                    ${hideStudentPosts ? '👁️ 投稿を表示' : '🙈 投稿を隠す'}
+                  </button>
+                  <button onclick="showResetConfirmModal()" 
+                          class="px-3 py-1 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+                          style="font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">
+                    🗑️ 全投稿リセット
+                  </button>
+                </div>
+              ` : ''}
+            </div>
+          </div>
+        </div>
+
+        <!-- メインコンテンツ -->
+        <div class="flex-1 flex flex-col overflow-hidden">
+          <!-- 黒板エリア -->
+          <div class="px-6 py-2 flex-shrink-0">
+            <div id="blackboard" class="rounded-lg shadow-lg p-3 cursor-pointer" style="background-color: ${config.blackboard_color};" ${isTeacherMode ? 'onclick="openBlackboardModal()"' : ''}>
+              <div class="flex items-center justify-between mb-1">
+                <h2 class="text-lg font-bold text-white chalk-text" style="font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 1.125}px;">📋 黒板</h2>
+                ${isTeacherMode ? `<span class="text-white text-sm opacity-75" style="font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.75}px;">クリックして編集</span>` : ''}
+              </div>
+              <div class="text-white chalk-text p-2 min-h-8 whitespace-pre-wrap" style="font-family: ${config.font_family}, monospace; font-size: ${config.font_size * 1.5}px; line-height: 1.4;">
+                ${convertUrlsToLinks(getCurrentBlackboardContent(), true) || '（テーマが設定されていません）'}
+              </div>
+            </div>
+          </div>
+
+          <!-- 教室エリア -->
+          <div class="flex-1 px-6 pb-3 overflow-hidden">
+            <div class="bg-white rounded-lg shadow-lg h-full flex flex-col">
+              <!-- 教室ヘッダー -->
+              <div class="px-6 py-3 border-b flex items-center justify-between flex-shrink-0">
+                <h2 class="text-lg font-bold" style="color: ${config.text_color}; font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 1.125}px;">🏫 教室（ページ ${pageNum}）</h2>
+                <div class="flex items-center gap-4">
+                  <button onclick="goToPreviousPage()" 
+                          ${pageNum === 1 ? 'disabled' : ''}
+                          class="action-button px-3 py-1 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          style="background-color: ${config.button_color}; font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">
+                    ← 前
+                  </button>
+                  <span class="font-medium" style="color: ${config.text_color}; font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">
+                    ${pageNum}
+                  </span>
+                  <button onclick="goToNextPage()" 
+                          class="action-button px-3 py-1 text-white rounded-lg transition-colors"
+                          style="background-color: ${config.button_color}; font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">
+                    次 →
+                  </button>
+                </div>
+              </div>
+              
+              <!-- 机グリッド -->
+              <div class="classroom-container p-4">
+                <div class="grid gap-2 h-full" style="grid-template-columns: repeat(${currentLayout.columns}, 1fr); grid-template-rows: repeat(${currentLayout.rows}, 1fr);">
+                  ${Array.from({length: currentLayout.rows * currentLayout.columns}, (_, i) => {
+                    const rows = currentLayout.rows;
+                    const cols = currentLayout.columns;
+                    const row = Math.floor(i / cols);
+                    const col = i % cols;
+                    const deskNumber = (cols - 1 - col) * rows + row + 1;
+                    const memo = currentPageMemos.find(m => m.desk_number === deskNumber);
+                    
+                    let shouldShowContent = false;
+                    let deskColor = config.desk_color;
+                    let clickAction = `openDeskModal(${deskNumber})`;
+                    let showVisibilityIcon = false;
+                    let visibilityIcon = '';
+                    let iconClickAction = '';
+                    let isProtected = false;
+                    let isOwnPost = false;
+                    
+                    if (memo) {
+                      isOwnPost = isPostAuthor(memo);
+                      
+                      if (isTeacherMode) {
+                        shouldShowContent = true;
+                        showVisibilityIcon = hideStudentPosts;
+                        
+                        if (hideStudentPosts) {
+                          if (memo.is_selected) {
+                            deskColor = '#3b82f6';
+                            visibilityIcon = '👀';
+                            iconClickAction = `toggleIndividualDeskVisibility('${memo.__backendId}')`;
+                          } else {
+                            deskColor = '#f59e0b';
+                            visibilityIcon = '😎';
+                            iconClickAction = `toggleIndividualDeskVisibility('${memo.__backendId}')`;
+                          }
+                        } else {
+                          deskColor = '#3b82f6';
+                        }
+                      } else {
+                        if (isOwnPost) {
+                          shouldShowContent = true;
+                          deskColor = '#3b82f6';
+                        } else {
+                          isProtected = true;
+                          
+                          if (hideStudentPosts) {
+                            if (memo.is_selected) {
+                              shouldShowContent = true;
+                              deskColor = '#0288d1';
+                            } else {
+                              shouldShowContent = false;
+                              deskColor = '#f59e0b';
+                            }
+                          } else {
+                            shouldShowContent = true;
+                            deskColor = '#0288d1';
+                          }
+                        }
+                      }
+                    }
+                    
+                    return `
+                      <div onclick="${clickAction}" 
+                           class="desk rounded-lg cursor-pointer relative min-h-0"
+                           style="background: linear-gradient(135deg, ${deskColor} 0%, ${adjustColor(deskColor, -10)} 100%);">
+                        ${memo ? `
+                          ${shouldShowContent ? `
+                            <div class="memo-note rounded px-2 py-2 h-full overflow-hidden flex flex-col relative ${isProtected ? 'protected-memo' : (isOwnPost ? 'own-memo' : '')}" style="background: ${isProtected ? 'linear-gradient(135deg, #e0f2fe 0%, #b3e5fc 100%)' : (isOwnPost ? 'linear-gradient(135deg, #f0f9ff 0%, #dbeafe 100%)' : 'linear-gradient(135deg, #fef9c3 0%, #fde68a 100%)')};">
+                              ${showVisibilityIcon ? `
+                                <div class="absolute top-1 right-1 cursor-pointer text-lg hover:scale-110 transition-transform z-10" 
+                                     onclick="event.stopPropagation(); ${iconClickAction}" 
+                                     title="${memo.is_selected ? '生徒に非表示にする' : '生徒に表示する'}">
+                                  ${visibilityIcon}
+                                </div>
+                              ` : ''}
+                              ${isProtected ? `
+                                <div class="absolute top-1 left-1 text-blue-600 text-sm" title="他の生徒の投稿（保護中）">🔒</div>
+                              ` : (isOwnPost ? `
+                                <div class="absolute top-1 left-1 text-blue-600 text-sm" title="あなたの投稿">✏️</div>
+                              ` : '')}
+                              ${memo.image_data ? `
+                                <div class="mb-1">
+                                  <img src="${memo.image_data}" class="desk-image" alt="投稿画像">
+                                </div>
+                              ` : ''}
+                              <div class="text-xs font-semibold mb-1 ${(isProtected || isOwnPost) ? 'mt-4' : ''}" style="color: ${config.text_color}; font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.75}px;">
+                                ${memo.student_name}
+                              </div>
+                              ${memo.memo_content ? `
+                                <div class="text-xs flex-1 overflow-hidden" style="color: ${config.text_color}; font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.75}px; line-height: 1.2; display: -webkit-box; -webkit-line-clamp: ${memo.image_data ? '4' : '12'}; -webkit-box-orient: vertical;">
+                                  ${convertUrlsToLinks(escapeHtml(memo.memo_content))}
+                                </div>
+                              ` : ''}
+                            </div>
+                          ` : `
+                            <div class="h-full flex flex-col items-center justify-center text-white text-opacity-90 text-xs text-center" style="font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.75}px;">
+                              <div class="text-2xl mb-1">📝</div>
+                              <div class="font-semibold">机 ${deskNumber}</div>
+                              <div class="text-xs opacity-75">${isTeacherMode && hideStudentPosts ? 'クリックして選択' : '投稿あり（保護中）'}</div>
+                            </div>
+                          `}
+                        ` : `
+                          <div class="h-full flex flex-col items-center justify-center text-white text-opacity-60 text-xs text-center" style="font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.75}px;">
+                            <div class="font-semibold" style="font-size: ${config.font_size * 1.5}px;">机 ${deskNumber}</div>
+                            <div>クリックして入力</div>
+                          </div>
+                        `}
+                      </div>
+                    `;
+                  }).join('')}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    // ========================================
+    // 教師モード管理
+    // ========================================
+    
+    window.toggleTeacherMode = function(checkbox) {
+      if (checkbox.checked) {
+        showPasswordModal(checkbox);
+      } else {
+        isTeacherMode = false;
+        renderApp();
+      }
+    };
+
+    function showPasswordModal(checkbox) {
+      const modal = document.createElement('div');
+      modal.className = 'modal-backdrop fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50';
+      modal.onclick = (e) => {
+        if (e.target === modal) {
+          checkbox.checked = false;
+          closeModal(modal);
+        }
+      };
+
+      const config = getConfig();
+      
+      modal.innerHTML = `
+        <div class="modal-content bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+          <div class="flex justify-between items-center mb-4">
+            <h3 class="text-xl font-bold" style="color: ${config.text_color}; font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 1.25}px;">🔒 教師モード認証</h3>
+            <button onclick="handlePasswordCancel()" class="text-gray-500 hover:text-gray-700 text-2xl leading-none">&times;</button>
+          </div>
+          
+          <div class="space-y-4">
+            <div>
+              <label class="block text-sm font-medium mb-2" style="color: ${config.text_color}; font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">パスワードを入力してください</label>
+              <input type="password" id="teacher-password" 
+                     class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                     placeholder="パスワード"
+                     style="font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size}px;"
+                     onkeypress="if(event.key==='Enter') handlePasswordSubmit()">
+            </div>
+            
+            <div class="flex gap-2 justify-end">
+              <button onclick="handlePasswordCancel()" 
+                      class="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors"
+                      style="font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">
+                キャンセル
+              </button>
+              <button onclick="handlePasswordSubmit()" 
+                      class="action-button px-4 py-2 text-white rounded-lg transition-colors"
+                      style="background-color: ${config.button_color}; font-family: ${config.font_family}, sans-serif; font-size: ${config.font_size * 0.875}px;">
+                確認
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+      
+      document.body.appendChild(modal);
+      
+      setTimeout(() => {
+        const passwordInput = document.getElementById('teacher-password');
+        if (passwordInput) passwordInput.focus();
+      }, 100);
+    }
+
+    window.handlePasswordSubmit = function() {
+      const passwordInput = document.getElementById('teacher-password');
+      const modal = document.querySelector('.modal-backdrop');
+      const checkbox = document.querySelector('input[type="checkbox"]');
+      
+      if (passwordInput.value === 'teacher') {
+        isTeacherMode = true;
+        showToast("教師モードが有効になりました");
+        if (modal) modal.remove();
+        renderApp();
+      } else {
+        showToast("パスワードが間違っています", "error");
+        passwordInput.value = '';
+        passwordInput.focus();
+        checkbox.checked = false;
+      }
+    };
+
+    window.handlePasswordCancel = function() {
+      const modal = document.querySelector('.modal-backdrop');
+      const checkbox = document.querySelector('input[type="checkbox"]');
+      
+      checkbox.checked = false;
+      if (modal) modal.remove();
+    };
+
+    // ========================================
+    // 机配置管理
+    // ========================================
+    
+    window.applyDeskLayout = async function() {
+      const rowsInput = document.getElementById('desk-rows-input');
+      const columnsInput = document.getElementById('desk-columns-input');
+      
+      if (!rowsInput || !columnsInput) {
+        showToast("入力フィールドが見つかりません", "error");
+        return;
+      }
+      
+      const rows = parseInt(rowsInput.value);
+      const columns = parseInt(columnsInput.value);
+      
+      if (isNaN(rows) || isNaN(columns)) {
+        showToast("有効な数値を入力してください", "error");
+        return;
+      }
+      
+      if (rows >= 1 && rows <= 10 && columns >= 1 && columns <= 10) {
+        await saveDeskLayout(rows, columns);
+        
+        if (window.elementSdk && window.elementSdk.setConfig) {
+          window.elementSdk.setConfig({ 
+            desk_rows: rows.toString(),
+            desk_columns: columns.toString()
+          });
+        }
+      } else {
+        showToast("行数と列数は1〜10の範囲で入力してください", "error");
+      }
+    };
+
+    // ========================================
+    // 初期化
+    // ========================================
+    
+    async function init() {
+      getCurrentUserId();
+      
+      await initializeDataSdk();
+      await initializeElementSdk();
+      renderApp();
+    }
+
+    init();
+  </script>
+ </body>
 </html>
